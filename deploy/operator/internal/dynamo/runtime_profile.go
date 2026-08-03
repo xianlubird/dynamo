@@ -11,10 +11,7 @@ import (
 	"github.com/ai-dynamo/dynamo/deploy/operator/internal/runtimeversion"
 )
 
-// runtimeProfileForComponent resolves the component's effective runtime
-// version and maps it to rendering decisions. Components predating runtime
-// version validation retain the empty legacy profile when their version cannot
-// be resolved.
+// runtimeProfileForComponent returns the runtime profile for a component.
 func runtimeProfileForComponent(component *v1beta1.DynamoComponentDeploymentSharedSpec) runtimefeatures.RuntimeProfile {
 	if component == nil {
 		return runtimefeatures.RuntimeProfile{}

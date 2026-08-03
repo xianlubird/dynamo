@@ -318,16 +318,16 @@ func TestComputeBetaDGDWorkersSpecHash_IgnoresNonRolloutFields(t *testing.T) {
 	assert.Equal(t, baseHash, mustComputeBetaDGDWorkersSpecHash(t, betaDGD(t, disabledScalingAdapter)))
 }
 
-func TestComputeBetaDGDWorkersSpecHash_KeepsLegacyRuntimeProfileEmpty(t *testing.T) {
+func TestComputeBetaDGDWorkersSpecHash_KeepsPreGateRuntimeProfileEmpty(t *testing.T) {
 	base := betaDGD(t, baseDGD(map[string]*v1alpha1.DynamoComponentDeploymentSharedSpec{
 		"worker": {ComponentType: commonconsts.ComponentTypeWorker},
 	}))
 	baseHash := mustComputeBetaDGDWorkersSpecHash(t, base)
 
-	runtime14 := base.DeepCopy()
-	runtime14.Spec.Components[0].RuntimeVersionOverride = "1.4.0"
+	runtime13 := base.DeepCopy()
+	runtime13.Spec.Components[0].RuntimeVersionOverride = "1.3.0"
 
-	assert.Equal(t, baseHash, mustComputeBetaDGDWorkersSpecHash(t, runtime14))
+	assert.Equal(t, baseHash, mustComputeBetaDGDWorkersSpecHash(t, runtime13))
 }
 
 func TestComputeBetaDGDWorkersSpecHash_UsesCanonicalResolvedRuntimeProfile(t *testing.T) {
@@ -362,18 +362,18 @@ func TestComputeBetaDGDWorkersSpecHash_ChangesWithRuntimeProfile(t *testing.T) {
 			}},
 		},
 	}
-	base.Spec.Components[0].RuntimeVersionOverride = "1.4.0"
-	legacyProfileHash := mustComputeBetaDGDWorkersSpecHash(t, base)
+	base.Spec.Components[0].RuntimeVersionOverride = "1.3.0"
+	disabledProfileHash := mustComputeBetaDGDWorkersSpecHash(t, base)
 
 	versioned := base.DeepCopy()
-	versioned.Spec.Components[0].RuntimeVersionOverride = testRuntimeVersion15
-	versionedProfileHash := mustComputeBetaDGDWorkersSpecHash(t, versioned)
-	assert.NotEqual(t, legacyProfileHash, versionedProfileHash, "a different effective rendering profile must change the hash")
+	versioned.Spec.Components[0].RuntimeVersionOverride = "1.4.0"
+	enabledProfileHash := mustComputeBetaDGDWorkersSpecHash(t, versioned)
+	assert.NotEqual(t, disabledProfileHash, enabledProfileHash, "a different effective rendering profile must change the hash")
 
 	newerSameProfile := base.DeepCopy()
 	newerSameProfile.Spec.Components[0].RuntimeVersionOverride = "2.0.0"
 
-	assert.Equal(t, versionedProfileHash, mustComputeBetaDGDWorkersSpecHash(t, newerSameProfile), "version changes with the same effective profile must not change the hash")
+	assert.Equal(t, enabledProfileHash, mustComputeBetaDGDWorkersSpecHash(t, newerSameProfile), "version changes with the same effective profile must not change the hash")
 }
 
 func TestComputeBetaDGDWorkersSpecHash_TracksPreservedAlphaResourceMetadata(t *testing.T) {

@@ -34,11 +34,12 @@ func TestRuntimeProfileForComponent(t *testing.T) {
 		{
 			name:     "the override is authoritative",
 			image:    "nvcr.io/nvidia/ai-dynamo/runtime:1.5.0",
-			override: "1.4.0",
+			override: "1.3.0",
 		},
 		{
-			name:  "runtime 1.4 keeps the legacy profile",
+			name:  "runtime 1.4 enables the gate",
 			image: "nvcr.io/nvidia/ai-dynamo/runtime:1.4.0",
+			want:  true,
 		},
 		{
 			name:  "an unresolvable legacy image keeps the legacy profile",

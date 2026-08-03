@@ -18,15 +18,15 @@ func TestProfileForVersion(t *testing.T) {
 		want    RuntimeProfile
 	}{
 		{
-			name: "unknown runtime keeps the legacy profile",
+			name: "unknown runtime disables gates",
 		},
 		{
-			name:    "runtime 1.4 keeps the legacy profile",
+			name:    "runtime below the gate threshold disables it",
+			version: &runtimeversion.Version{Major: 1, Minor: 3, Patch: 9},
+		},
+		{
+			name:    "runtime at the gate threshold enables it",
 			version: &runtimeversion.Version{Major: 1, Minor: 4, Patch: 0},
-		},
-		{
-			name:    "runtime 1.5 enables the first versioned profile",
-			version: &runtimeversion.Version{Major: 1, Minor: 5, Patch: 0},
 			want:    RuntimeProfile{CanaryHealthChecks: true},
 		},
 		{

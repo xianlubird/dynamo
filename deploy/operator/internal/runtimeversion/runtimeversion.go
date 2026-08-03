@@ -64,9 +64,7 @@ func ParseImageVersion(image string) (Version, error) {
 	return fromSemver(version), nil
 }
 
-// Resolve returns the effective runtime compatibility version. An explicit
-// override is authoritative; otherwise the version is derived from the image
-// tag.
+// Resolve returns the override or the version derived from the image tag.
 func Resolve(image, override string) (Version, error) {
 	if override != "" {
 		return Parse(override)

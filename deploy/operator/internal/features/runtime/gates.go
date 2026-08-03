@@ -7,6 +7,7 @@ package runtime
 
 import "github.com/ai-dynamo/dynamo/deploy/operator/internal/runtimeversion"
 
+// Add new gates to RuntimeProfile and ProfileForVersion in profile.go.
 var (
 	// CanaryHealthChecks gates the canary health-check rendering defaults
 	// introduced for Dynamo runtime 1.4.0.
