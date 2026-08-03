@@ -34,6 +34,7 @@ import (
 	"github.com/ai-dynamo/dynamo/deploy/operator/internal/controller_common"
 	"github.com/ai-dynamo/dynamo/deploy/operator/internal/dra"
 	"github.com/ai-dynamo/dynamo/deploy/operator/internal/features"
+	runtimefeatures "github.com/ai-dynamo/dynamo/deploy/operator/internal/features/runtime"
 	gmsruntime "github.com/ai-dynamo/dynamo/deploy/operator/internal/gms"
 	snapshotprotocol "github.com/ai-dynamo/dynamo/deploy/snapshot/protocol"
 	grovev1alpha1 "github.com/ai-dynamo/grove/operator/api/core/v1alpha1"
@@ -1282,38 +1283,17 @@ func TestGenerateLabelsAndAnnotations_UsePreservedAlphaDGDServiceMetadata(t *tes
 	assert.Equal(t, "from-pod-template", annotations["pod-template-annotation"])
 }
 
-// TestGenerateComponentContext tests the generateComponentContext function
-// to ensure it correctly computes the DynamoNamespace from authoritative sources
-// (k8s namespace + DGD name), ignoring any deprecated dynamoNamespace field.
+// TestGenerateComponentContext verifies namespace resolution and complete context construction.
 func TestGenerateComponentContext(t *testing.T) {
 	tests := []struct {
-		name                       string
-		component                  *v1alpha1.DynamoComponentDeploymentSharedSpec
-		parentGraphDeploymentName  string
-		namespace                  string
-		numberOfNodes              int32
-		discoveryBackend           configv1alpha1.DiscoveryBackend
-		expectedDynamoNamespace    string
-		expectedComponentType      string
-		expectedParentDGDName      string
-		expectedParentDGDNamespace string
+		name                      string
+		component                 *v1alpha1.DynamoComponentDeploymentSharedSpec
+		parentGraphDeploymentName string
+		namespace                 string
+		numberOfNodes             int32
+		discovery                 DiscoveryContext
+		want                      ComponentContext
 	}{
-		{
-			name: "namespace-scoped operator: computes correct dynamo namespace",
-			component: &v1alpha1.DynamoComponentDeploymentSharedSpec{
-				ComponentType: commonconsts.ComponentTypePlanner,
-				// Deprecated field set to incorrect value - should be ignored
-				DynamoNamespace: ptr.To("old-incorrect-value"),
-			},
-			parentGraphDeploymentName:  "my-deployment",
-			namespace:                  "my-namespace",
-			numberOfNodes:              1,
-			discoveryBackend:           configv1alpha1.DiscoveryBackendKubernetes,
-			expectedDynamoNamespace:    "my-namespace-my-deployment",
-			expectedComponentType:      commonconsts.ComponentTypePlanner,
-			expectedParentDGDName:      "my-deployment",
-			expectedParentDGDNamespace: "my-namespace",
-		},
 		{
 			name: "deprecated dynamoNamespace field is ignored",
 			component: &v1alpha1.DynamoComponentDeploymentSharedSpec{
@@ -1321,14 +1301,24 @@ func TestGenerateComponentContext(t *testing.T) {
 				// This is the bug case: profiler sets dynamoNamespace to just DGD name
 				DynamoNamespace: ptr.To("vllm-disagg"),
 			},
-			parentGraphDeploymentName:  "vllm-disagg",
-			namespace:                  "djangoz",
-			numberOfNodes:              1,
-			discoveryBackend:           configv1alpha1.DiscoveryBackendKubernetes,
-			expectedDynamoNamespace:    "djangoz-vllm-disagg",
-			expectedComponentType:      commonconsts.ComponentTypeFrontend,
-			expectedParentDGDName:      "vllm-disagg",
-			expectedParentDGDNamespace: "djangoz",
+			parentGraphDeploymentName: "vllm-disagg",
+			namespace:                 "djangoz",
+			numberOfNodes:             1,
+			discovery: DiscoveryContext{
+				Backend: configv1alpha1.DiscoveryBackendKubernetes,
+				Mode:    configv1alpha1.KubeDiscoveryModePod,
+			},
+			want: ComponentContext{
+				numberOfNodes:                  1,
+				ComponentType:                  commonconsts.ComponentTypeFrontend,
+				ParentGraphDeploymentName:      "vllm-disagg",
+				ParentGraphDeploymentNamespace: "djangoz",
+				Discovery: DiscoveryContext{
+					Backend: configv1alpha1.DiscoveryBackendKubernetes,
+					Mode:    configv1alpha1.KubeDiscoveryModePod,
+				},
+				DynamoNamespace: "djangoz-vllm-disagg",
+			},
 		},
 		{
 			name: "GlobalDynamoNamespace takes precedence",
@@ -1338,91 +1328,109 @@ func TestGenerateComponentContext(t *testing.T) {
 				// Even with deprecated field set, GlobalDynamoNamespace should win
 				DynamoNamespace: ptr.To("should-be-ignored"),
 			},
-			parentGraphDeploymentName:  "shared-frontend",
-			namespace:                  "production",
-			numberOfNodes:              2,
-			discoveryBackend:           configv1alpha1.DiscoveryBackendEtcd,
-			expectedDynamoNamespace:    commonconsts.GlobalDynamoNamespace,
-			expectedComponentType:      commonconsts.ComponentTypeWorker,
-			expectedParentDGDName:      "shared-frontend",
-			expectedParentDGDNamespace: "production",
-		},
-		{
-			name: "nil dynamoNamespace field still computes correctly",
-			component: &v1alpha1.DynamoComponentDeploymentSharedSpec{
-				ComponentType:   commonconsts.ComponentTypePlanner,
-				DynamoNamespace: nil,
+			parentGraphDeploymentName: "shared-frontend",
+			namespace:                 "production",
+			numberOfNodes:             2,
+			discovery: DiscoveryContext{
+				Backend: configv1alpha1.DiscoveryBackendEtcd,
+				Mode:    configv1alpha1.KubeDiscoveryModePod,
 			},
-			parentGraphDeploymentName:  "test-dgd",
-			namespace:                  "default",
-			numberOfNodes:              1,
-			discoveryBackend:           configv1alpha1.DiscoveryBackendKubernetes,
-			expectedDynamoNamespace:    "default-test-dgd",
-			expectedComponentType:      commonconsts.ComponentTypePlanner,
-			expectedParentDGDName:      "test-dgd",
-			expectedParentDGDNamespace: "default",
+			want: ComponentContext{
+				numberOfNodes:                  2,
+				ComponentType:                  commonconsts.ComponentTypeWorker,
+				ParentGraphDeploymentName:      "shared-frontend",
+				ParentGraphDeploymentNamespace: "production",
+				Discovery: DiscoveryContext{
+					Backend: configv1alpha1.DiscoveryBackendEtcd,
+					Mode:    configv1alpha1.KubeDiscoveryModePod,
+				},
+				DynamoNamespace: commonconsts.GlobalDynamoNamespace,
+			},
 		},
 		{
-			name: "different namespace and DGD name combinations",
+			name: "worker includes hash suffix and runtime profile",
+			component: &v1alpha1.DynamoComponentDeploymentSharedSpec{
+				ComponentType:          commonconsts.ComponentTypeWorker,
+				RuntimeVersionOverride: "1.5.0",
+				ExtraPodMetadata: &v1alpha1.ExtraPodMetadata{
+					Labels: map[string]string{
+						commonconsts.KubeLabelDynamoWorkerHash: "deadbeef",
+					},
+				},
+				ExtraPodSpec: &v1alpha1.ExtraPodSpec{
+					MainContainer: &corev1.Container{
+						Name:  commonconsts.MainContainerName,
+						Image: "registry.example/runtime:custom",
+					},
+				},
+			},
+			parentGraphDeploymentName: "test-dgd",
+			namespace:                 "default",
+			numberOfNodes:             3,
+			discovery: DiscoveryContext{
+				Backend: configv1alpha1.DiscoveryBackendKubernetes,
+				Mode:    configv1alpha1.KubeDiscoveryModeContainer,
+			},
+			want: ComponentContext{
+				numberOfNodes:                  3,
+				ComponentType:                  commonconsts.ComponentTypeWorker,
+				ParentGraphDeploymentName:      "test-dgd",
+				ParentGraphDeploymentNamespace: "default",
+				Discovery: DiscoveryContext{
+					Backend: configv1alpha1.DiscoveryBackendKubernetes,
+					Mode:    configv1alpha1.KubeDiscoveryModeContainer,
+				},
+				DynamoNamespace:  "default-test-dgd",
+				WorkerHashSuffix: "deadbeef",
+				RuntimeProfile: runtimefeatures.RuntimeProfile{
+					CanaryHealthChecks: true,
+				},
+			},
+		},
+		{
+			name: "non-worker ignores worker hash label",
 			component: &v1alpha1.DynamoComponentDeploymentSharedSpec{
 				ComponentType: commonconsts.ComponentTypeFrontend,
+				ExtraPodMetadata: &v1alpha1.ExtraPodMetadata{
+					Labels: map[string]string{
+						commonconsts.KubeLabelDynamoWorkerHash: "deadbeef",
+					},
+				},
 			},
-			parentGraphDeploymentName:  "llama-70b-prod",
-			namespace:                  "ml-inference",
-			numberOfNodes:              4,
-			discoveryBackend:           configv1alpha1.DiscoveryBackendEtcd,
-			expectedDynamoNamespace:    "ml-inference-llama-70b-prod",
-			expectedComponentType:      commonconsts.ComponentTypeFrontend,
-			expectedParentDGDName:      "llama-70b-prod",
-			expectedParentDGDNamespace: "ml-inference",
+			parentGraphDeploymentName: "frontend-dgd",
+			namespace:                 "default",
+			numberOfNodes:             1,
+			discovery: DiscoveryContext{
+				Backend: configv1alpha1.DiscoveryBackendKubernetes,
+				Mode:    configv1alpha1.KubeDiscoveryModePod,
+			},
+			want: ComponentContext{
+				numberOfNodes:                  1,
+				ComponentType:                  commonconsts.ComponentTypeFrontend,
+				ParentGraphDeploymentName:      "frontend-dgd",
+				ParentGraphDeploymentNamespace: "default",
+				Discovery: DiscoveryContext{
+					Backend: configv1alpha1.DiscoveryBackendKubernetes,
+					Mode:    configv1alpha1.KubeDiscoveryModePod,
+				},
+				DynamoNamespace: "default-frontend-dgd",
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := generateComponentContext(
+			got := generateComponentContext(
 				betaComponent(t, tt.component),
 				tt.parentGraphDeploymentName,
 				tt.namespace,
 				tt.numberOfNodes,
-				DiscoveryContext{Backend: tt.discoveryBackend, Mode: configv1alpha1.KubeDiscoveryModePod},
+				tt.discovery,
 			)
 
-			assert.Equal(t, tt.expectedDynamoNamespace, ctx.DynamoNamespace,
-				"DynamoNamespace should be computed from k8s namespace + DGD name")
-			assert.Equal(t, tt.expectedComponentType, ctx.ComponentType)
-			assert.Equal(t, tt.expectedParentDGDName, ctx.ParentGraphDeploymentName)
-			assert.Equal(t, tt.expectedParentDGDNamespace, ctx.ParentGraphDeploymentNamespace)
-			assert.Equal(t, tt.numberOfNodes, ctx.numberOfNodes)
-			assert.Equal(t, tt.discoveryBackend, ctx.Discovery.Backend)
+			assert.Equal(t, tt.want, got)
 		})
 	}
-}
-
-func TestGenerateComponentContextIncludesRuntimeProfile(t *testing.T) {
-	component := &v1beta1.DynamoComponentDeploymentSharedSpec{
-		ComponentName:          "worker",
-		ComponentType:          commonconsts.ComponentTypeWorker,
-		RuntimeVersionOverride: "1.5.0",
-		PodTemplate: &corev1.PodTemplateSpec{
-			Spec: corev1.PodSpec{
-				Containers: []corev1.Container{{
-					Name:  commonconsts.MainContainerName,
-					Image: "registry.example/runtime:custom",
-				}},
-			},
-		},
-	}
-
-	ctx := generateComponentContext(
-		component,
-		"test-dgd",
-		"default",
-		1,
-		DiscoveryContext{Backend: configv1alpha1.DiscoveryBackendKubernetes, Mode: configv1alpha1.KubeDiscoveryModePod},
-	)
-
-	assert.True(t, ctx.RuntimeProfile.CanaryHealthChecks)
 }
 
 func Test_updateDynDeploymentConfig(t *testing.T) {
